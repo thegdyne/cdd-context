@@ -12,7 +12,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .cache import Cache, hash_file, hash_prompt
+from .cache import (
+    Cache, hash_file, hash_prompt,
+    save_manifest, load_manifest, compute_changes, ChangeSet,
+)
 from .generator import generate
 from .scanner import scan
 from .summarizer import summarize_file, get_prompt_hash, get_backend_id, get_tool_version
@@ -48,6 +51,15 @@ def cmd_build(args) -> int:
         print(f"Error: Root directory does not exist: {root}", file=sys.stderr)
         return 1
     
+    # Initialize cache
+    cache_dir = root / ".context-cache"
+    cache = Cache(cache_dir=cache_dir)
+    
+    # Handle --changes mode
+    changes_mode = getattr(args, 'changes', None)
+    if changes_mode:
+        return cmd_build_changes(args, root, cache, changes_mode)
+    
     print(f"Scanning {root}...")
     
     # Scan
@@ -69,9 +81,6 @@ def cmd_build(args) -> int:
         if len(files) > 20:
             print(f"  ... and {len(files) - 20} more")
         return 0
-    
-    # Initialize cache
-    cache = Cache(cache_dir=root / ".context-cache")
     
     # Summarize files
     print("Summarizing files...")
@@ -136,6 +145,14 @@ def cmd_build(args) -> int:
     print("Generating context...")
     project_name = root.name
     
+    # Compute scan_hash for manifest
+    from .generator import _compute_scan_hash, FileSummary
+    file_summaries = [
+        FileSummary(path=s["path"], source_hash=s["source_hash"], summary=s["summary"])
+        for s in summaries
+    ]
+    scan_hash = _compute_scan_hash(file_summaries, ignore_mode)
+    
     result = generate(
         files=summaries,
         ignore_mode=ignore_mode,
@@ -156,6 +173,15 @@ def cmd_build(args) -> int:
     output_path.write_text(result["content"], encoding="utf-8")
     print(f"\nWrote {output_path}")
     
+    # Save manifest for --changes
+    save_manifest(
+        cache_dir=cache_dir,
+        tool_version=tool_version,
+        ignore_mode=ignore_mode,
+        scan_hash=scan_hash,
+        files=[{"path": s["path"], "source_hash": s["source_hash"]} for s in summaries],
+    )
+    
     # Clipboard
     if args.clip:
         if copy_to_clipboard(result["content"]):
@@ -164,6 +190,319 @@ def cmd_build(args) -> int:
             print("Warning: Could not copy to clipboard")
     
     return 0
+
+
+def cmd_build_changes(args, root: Path, cache: Cache, changes_mode: str) -> int:
+    """Build changes output (delta since last build)."""
+    cache_dir = root / ".context-cache"
+    
+    # Load previous manifest
+    prev_manifest = load_manifest(cache_dir)
+    if prev_manifest is None:
+        print("No previous build snapshot found; run 'cdd-context build' first.", file=sys.stderr)
+        return 2
+    
+    # Scan current state
+    scan_result = scan(str(root))
+    files = scan_result["files"]
+    ignore_mode = scan_result["ignore_mode"]
+    
+    # Check ignore_mode mismatch
+    if prev_manifest.ignore_mode != ignore_mode:
+        print(
+            f"Baseline built with ignore_mode={prev_manifest.ignore_mode}, "
+            f"current run is {ignore_mode}; run full build to reset baseline.",
+            file=sys.stderr
+        )
+        return 2
+    
+    # Hash current files
+    tool_version = get_tool_version()
+    prompt_hash = get_prompt_hash()
+    backend_id = get_backend_id()
+    
+    cur_files = []
+    for file_path in files:
+        full_path = root / file_path
+        if not full_path.exists():
+            continue
+        try:
+            source_hash = hash_file(full_path)
+            cur_files.append({"path": file_path, "source_hash": source_hash})
+        except Exception:
+            continue
+    
+    # Compute scan_hash
+    from .generator import _compute_scan_hash, FileSummary
+    file_summaries = [FileSummary(path=f["path"], source_hash=f["source_hash"]) for f in cur_files]
+    cur_scan_hash = _compute_scan_hash(file_summaries, ignore_mode)
+    
+    # Compute changes
+    changes = compute_changes(prev_manifest, cur_files, cur_scan_hash, ignore_mode)
+    
+    if changes.is_empty():
+        print("No changes since last build.")
+        return 0
+    
+    # Generate output based on mode
+    project_name = root.name
+    
+    if changes_mode == "list":
+        output = format_changes_list(project_name, changes)
+    elif changes_mode == "summaries":
+        output = format_changes_summaries(
+            project_name, changes, root, cache,
+            prompt_hash, backend_id, tool_version
+        )
+    else:  # both
+        output = format_changes_both(
+            project_name, changes, root, cache,
+            prompt_hash, backend_id, tool_version
+        )
+    
+    # Output
+    print(output)
+    
+    if args.clip:
+        if copy_to_clipboard(output):
+            print("\nCopied to clipboard")
+        else:
+            print("\nWarning: Could not copy to clipboard")
+    
+    return 0
+
+
+def format_changes_list(project_name: str, changes: ChangeSet) -> str:
+    """Format changes as list only."""
+    lines = [
+        f"# Project Changes: {project_name}",
+        "",
+        f"> Since scan: {changes.prev_scan_hash} → {changes.cur_scan_hash} | Mode: {changes.ignore_mode}",
+        "",
+    ]
+    
+    if changes.modified:
+        lines.append("## Modified")
+        for path in changes.modified:
+            lines.append(f"- {path}")
+        lines.append("")
+    
+    if changes.added:
+        lines.append("## Added")
+        for path in changes.added:
+            lines.append(f"- {path}")
+        lines.append("")
+    
+    if changes.deleted:
+        lines.append("## Deleted")
+        for path in changes.deleted:
+            lines.append(f"- {path}")
+        lines.append("")
+    
+    if changes.renamed:
+        lines.append("## Renamed")
+        for old_path, new_path in changes.renamed:
+            lines.append(f"- {old_path} → {new_path}")
+        lines.append("")
+    
+    return "\n".join(lines)
+
+
+def format_changes_both(
+    project_name: str,
+    changes: ChangeSet,
+    root: Path,
+    cache: Cache,
+    prompt_hash: str,
+    backend_id: str,
+    tool_version: str,
+) -> str:
+    """Format changes with list header then summaries."""
+    lines = [
+        f"# Project Changes: {project_name}",
+        "",
+        f"> Since scan: {changes.prev_scan_hash} → {changes.cur_scan_hash} | Mode: {changes.ignore_mode}",
+        "",
+    ]
+    
+    # Summary line
+    parts = []
+    if changes.modified:
+        parts.append(f"{len(changes.modified)} modified")
+    if changes.added:
+        parts.append(f"{len(changes.added)} added")
+    if changes.deleted:
+        parts.append(f"{len(changes.deleted)} deleted")
+    if changes.renamed:
+        parts.append(f"{len(changes.renamed)} renamed")
+    
+    lines.append(f"**Changes:** {', '.join(parts)}")
+    lines.append("")
+    
+    def get_summary(file_path: str) -> dict:
+        full_path = root / file_path
+        try:
+            source_hash = hash_file(full_path)
+        except Exception:
+            return {"summary": f"Could not read: {file_path}"}
+        
+        cache_result = cache.get(
+            path=file_path,
+            source_hash=source_hash,
+            prompt_hash=prompt_hash,
+            backend_id=backend_id,
+            tool_version=tool_version,
+        )
+        
+        if cache_result.cache_hit:
+            return cache_result.summary
+        
+        summary = summarize_file(str(full_path), use_llm=False)
+        cache.put(file_path, source_hash, prompt_hash, backend_id, tool_version, summary)
+        return summary
+    
+    def format_file_summary(path: str, summary: dict) -> list[str]:
+        result = [f"### {path}"]
+        role = summary.get("role", "unknown")
+        result.append(f"**Role:** {role}")
+        result.append("")
+        result.append(summary.get("summary", ""))
+        
+        public_symbols = summary.get("public_symbols", [])
+        if public_symbols:
+            result.append("")
+            result.append(f"**Provides:** {', '.join(public_symbols[:10])}")
+        
+        import_deps = summary.get("import_deps", [])
+        if import_deps:
+            result.append(f"**Consumes:** {', '.join(import_deps[:10])}")
+        
+        result.append("")
+        return result
+    
+    if changes.modified:
+        lines.append("## Modified")
+        lines.append("")
+        for path in changes.modified:
+            summary = get_summary(path)
+            lines.extend(format_file_summary(path, summary))
+    
+    if changes.added:
+        lines.append("## Added")
+        lines.append("")
+        for path in changes.added:
+            summary = get_summary(path)
+            lines.extend(format_file_summary(path, summary))
+    
+    if changes.renamed:
+        lines.append("## Renamed")
+        lines.append("")
+        for old_path, new_path in changes.renamed:
+            lines.append(f"*{old_path} → {new_path}*")
+            lines.append("")
+            summary = get_summary(new_path)
+            lines.extend(format_file_summary(new_path, summary))
+    
+    if changes.deleted:
+        lines.append("## Deleted")
+        lines.append("")
+        for path in changes.deleted:
+            lines.append(f"- {path}")
+        lines.append("")
+    
+    return "\n".join(lines)
+
+
+def format_changes_summaries(
+    project_name: str,
+    changes: ChangeSet,
+    root: Path,
+    cache: Cache,
+    prompt_hash: str,
+    backend_id: str,
+    tool_version: str,
+) -> str:
+    """Format changes with summaries for added/modified files."""
+    lines = [
+        f"# Project Changes: {project_name}",
+        "",
+        f"> Since scan: {changes.prev_scan_hash} → {changes.cur_scan_hash} | Mode: {changes.ignore_mode}",
+        "",
+    ]
+    
+    def get_summary(file_path: str) -> dict:
+        full_path = root / file_path
+        try:
+            source_hash = hash_file(full_path)
+        except Exception:
+            return {"summary": f"Could not read: {file_path}"}
+        
+        # Check cache
+        cache_result = cache.get(
+            path=file_path,
+            source_hash=source_hash,
+            prompt_hash=prompt_hash,
+            backend_id=backend_id,
+            tool_version=tool_version,
+        )
+        
+        if cache_result.cache_hit:
+            return cache_result.summary
+        
+        # Generate summary
+        summary = summarize_file(str(full_path), use_llm=False)
+        cache.put(file_path, source_hash, prompt_hash, backend_id, tool_version, summary)
+        return summary
+    
+    def format_file_summary(path: str, summary: dict) -> list[str]:
+        result = [f"### {path}"]
+        role = summary.get("role", "unknown")
+        result.append(f"**Role:** {role}")
+        result.append("")
+        result.append(summary.get("summary", ""))
+        
+        public_symbols = summary.get("public_symbols", [])
+        if public_symbols:
+            result.append("")
+            result.append(f"**Provides:** {', '.join(public_symbols[:10])}")
+        
+        import_deps = summary.get("import_deps", [])
+        if import_deps:
+            result.append(f"**Consumes:** {', '.join(import_deps[:10])}")
+        
+        result.append("")
+        return result
+    
+    if changes.modified:
+        lines.append("## Modified")
+        lines.append("")
+        for path in changes.modified:
+            summary = get_summary(path)
+            lines.extend(format_file_summary(path, summary))
+    
+    if changes.added:
+        lines.append("## Added")
+        lines.append("")
+        for path in changes.added:
+            summary = get_summary(path)
+            lines.extend(format_file_summary(path, summary))
+    
+    if changes.renamed:
+        lines.append("## Renamed")
+        lines.append("")
+        for old_path, new_path in changes.renamed:
+            summary = get_summary(new_path)
+            lines.append(f"### {old_path} → {new_path}")
+            lines.extend(format_file_summary(new_path, summary)[1:])  # Skip duplicate header
+    
+    if changes.deleted:
+        lines.append("## Deleted")
+        lines.append("")
+        for path in changes.deleted:
+            lines.append(f"- {path}")
+        lines.append("")
+    
+    return "\n".join(lines)
 
 
 def cmd_status(args) -> int:
@@ -282,6 +621,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     build_parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     build_parser.add_argument("--clip", action="store_true", help="Copy to clipboard")
     build_parser.add_argument("--format", choices=["md", "json"], default="md", help="Output format")
+    build_parser.add_argument(
+        "--changes",
+        nargs="?",
+        const="both",
+        choices=["list", "summaries", "both"],
+        help="Show changes since last build (list, summaries, or both)"
+    )
     build_parser.set_defaults(func=cmd_build)
     
     # status

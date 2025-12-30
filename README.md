@@ -12,64 +12,38 @@ When working with Claude across multiple sessions, you repeatedly share the same
 
 A local tool that scans your codebase, generates summaries of each file, and assembles them into a single context document. Paste once at session start, Claude is oriented. File details come on-demand.
 
-## Quick Start
+## Installation
 
 ```bash
-# Install from source
-git clone https://github.com/thegdyne/cdd-context.git
-cd cdd-context
-pip install -e .
+pip install cdd-context
+```
 
-# Go to any project
-cd ~/your-project
+## Usage
 
-# Generate context
+```bash
+# Generate PROJECT_CONTEXT.md
 cdd-context build
 
-# Output: PROJECT_CONTEXT.md created
-```
+# Generate and copy to clipboard
+cdd-context build --clip
 
-## Workflow
+# Show what would be summarized (no API calls)
+cdd-context build --dry-run
 
-**First session:**
-```bash
-cdd-context build --clip   # Generates + copies to clipboard
-```
-Paste into Claude. Claude now knows your project structure.
-
-**Later sessions:**
-```bash
-cdd-context build --clip   # Only re-summarizes changed files (cache hits)
-```
-
-**Check what's cached:**
-```bash
+# Check cache state
 cdd-context status
-# Cache entries: 47
-# Context file: PROJECT_CONTEXT.md (6200 bytes)
-```
 
-**Something weird? Reset:**
-```bash
+# Watch for changes and rebuild
+cdd-context watch
+
+# Clear cache (keeps PROJECT_CONTEXT.md)
 cdd-context clear-cache
-cdd-context build
-```
-
-## Commands
-
-```bash
-cdd-context build            # Generate PROJECT_CONTEXT.md
-cdd-context build --clip     # Generate and copy to clipboard
-cdd-context build --dry-run  # Show what would be summarized (no changes)
-cdd-context status           # Show cache state
-cdd-context clear-cache      # Clear cache (keeps PROJECT_CONTEXT.md)
-cdd-context watch            # Watch for changes and rebuild (planned)
 ```
 
 ## How It Works
 
 1. **Scanner** walks your directory tree, respects `.gitignore` and `.contextignore`
-2. **Summarizer** generates concise summaries (heuristic-based, LLM integration planned)
+2. **Summarizer** generates concise summaries via LLM (Claude Haiku by default)
 3. **Cache** stores summaries keyed by file hash + prompt hash + backend
 4. **Generator** assembles everything into a structured markdown file
 
@@ -80,7 +54,7 @@ Only changed files are re-summarized. Typical projects stay under 8k tokens.
 ```markdown
 # Project Context: my-project
 
-> Files: 47 | Cache: 42/47 hits | Mode: git | Hash: a1b2c3d4
+> Files: 47 | Cache: 42/47 hits | Tokens: ~6200 | Mode: git
 
 ## Directory Structure
 
@@ -98,27 +72,11 @@ my-project/
 
 Main synthesis engine coordinating generators and MIDI input...
 
-**Provides:** start_engine, stop_engine, process_midi
-**Consumes:** os, sys, generators
-
 ## Other Files
 
 | File | Role | Summary |
 |------|------|---------|
 | src/generators/crystalline.py | library | Ice structure generator... |
-```
-
-## What Gets Ignored
-
-1. Everything in `.gitignore` (if in a git repo)
-2. Plus `.contextignore` patterns you add
-3. Plus built-in defaults:
-
-```
-.env, .env.*, *.pem, *.key, secrets.*
-node_modules/, __pycache__/, .git/
-*.log, *.pyc, .DS_Store
-dist/, build/, *.egg-info/
 ```
 
 ## Configuration
@@ -136,27 +94,23 @@ data/
 
 # Noise
 *.log
-vendor/
 ```
 
 ## Requirements
 
 - Python 3.10+
+- `ANTHROPIC_API_KEY` environment variable (for summarization)
 
 ## Development
 
 This project is built using [Contract-Driven Development](https://github.com/thegdyne/cdd).
 
 ```bash
-# Setup after clone
-python tests/setup_fixtures.py
-
-# Run all tests
+# Run tests
 python tests/test_scanner.py
-python tests/test_cache.py
-python tests/test_summarizer.py
-python tests/test_generator.py
-python tests/test_cli.py
+
+# Lint contracts (requires cdd-tooling)
+cdd lint contracts/
 ```
 
 ## Components
@@ -168,12 +122,6 @@ python tests/test_cli.py
 | summarizer | ✓ implemented | Heuristic file summarization (LLM integration planned) |
 | generator | ✓ implemented | PROJECT_CONTEXT.md assembly |
 | cli | ✓ implemented | Command-line interface |
-
-## Roadmap
-
-- [ ] LLM integration (Claude Haiku for better summaries)
-- [ ] Watch mode (auto-rebuild on file changes)
-- [ ] PyPI publish (`pip install cdd-context`)
 
 ## License
 

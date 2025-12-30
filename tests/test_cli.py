@@ -115,6 +115,58 @@ def test_status_command():
     print("✓ R002 status_command")
 
 
+def test_changes_no_baseline():
+    """R009: --changes should fail if no baseline exists."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fixture_src = Path("fixtures/non_git_project_with_contextignore")
+        fixture_dst = Path(tmpdir) / "project"
+        shutil.copytree(fixture_src, fixture_dst)
+        
+        # Try --changes without prior build
+        exit_code = main(["build", "--changes", "--root", str(fixture_dst)])
+        assert_eq(exit_code, 2, "R009 no baseline")
+    
+    print("✓ R009 changes_no_baseline")
+
+
+def test_changes_no_changes():
+    """R009: --changes should report no changes when nothing changed."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fixture_src = Path("fixtures/non_git_project_with_contextignore")
+        fixture_dst = Path(tmpdir) / "project"
+        shutil.copytree(fixture_src, fixture_dst)
+        
+        # Build first
+        main(["build", "--root", str(fixture_dst)])
+        
+        # Check changes - should be empty
+        exit_code = main(["build", "--changes", "--root", str(fixture_dst)])
+        assert_eq(exit_code, 0, "R009 no changes")
+    
+    print("✓ R009 changes_no_changes")
+
+
+def test_changes_detects_modification():
+    """R009: --changes should detect modified files."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fixture_src = Path("fixtures/non_git_project_with_contextignore")
+        fixture_dst = Path(tmpdir) / "project"
+        shutil.copytree(fixture_src, fixture_dst)
+        
+        # Build first
+        main(["build", "--root", str(fixture_dst)])
+        
+        # Modify a file
+        main_py = fixture_dst / "main.py"
+        main_py.write_text(main_py.read_text() + "\n# modified\n")
+        
+        # Check changes - should detect modification
+        exit_code = main(["build", "--changes=list", "--root", str(fixture_dst)])
+        assert_eq(exit_code, 0, "R009 detects modification")
+    
+    print("✓ R009 changes_detects_modification")
+
+
 def main_tests():
     print("=" * 60)
     print("CLI Contract Tests")
@@ -125,6 +177,9 @@ def main_tests():
         test_T002_dry_run_no_file,
         test_T003_clear_cache,
         test_status_command,
+        test_changes_no_baseline,
+        test_changes_no_changes,
+        test_changes_detects_modification,
     ]
     
     passed = 0

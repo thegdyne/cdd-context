@@ -12,49 +12,111 @@ When working with Claude across multiple sessions, you repeatedly share the same
 
 A local tool that scans your codebase, generates summaries of each file, and assembles them into a single context document. Paste once at session start, Claude is oriented. File details come on-demand.
 
-## Installation
+## Quick Start
 
 ```bash
-pip install cdd-context
-```
+# Install from source
+git clone https://github.com/thegdyne/cdd-context.git
+cd cdd-context
+pip install -e .
 
-## Usage
+# Go to any project
+cd ~/your-project
 
-```bash
-# Generate PROJECT_CONTEXT.md
+# Generate context
 cdd-context build
 
-# Generate and copy to clipboard
-cdd-context build --clip
+# Output: PROJECT_CONTEXT.md created
+```
 
-# Show what would be summarized (no API calls)
-cdd-context build --dry-run
+## Workflow
 
-# Check cache state
+**New session:**
+```bash
+cdd-context build --clip   # Generates + copies to clipboard
+```
+Paste into Claude. Claude now knows your project structure.
+
+**Mid-session after edits:**
+```bash
+cdd-context build --changes --clip   # Just the delta
+```
+Paste the changes. Claude catches up without re-reading everything.
+
+**Check what's cached:**
+```bash
 cdd-context status
+# Cache entries: 47
+# Context file: PROJECT_CONTEXT.md (6200 bytes)
+```
 
-# Watch for changes and rebuild
-cdd-context watch
-
-# Clear cache (keeps PROJECT_CONTEXT.md)
+**Something weird? Reset:**
+```bash
 cdd-context clear-cache
+cdd-context build
+```
+
+## Commands
+
+```bash
+cdd-context build                    # Generate PROJECT_CONTEXT.md
+cdd-context build --clip             # Generate and copy to clipboard
+cdd-context build --dry-run          # Show what would be summarized (no changes)
+cdd-context build --changes          # Show changes since last build (list + summaries)
+cdd-context build --changes=list     # List only (added/modified/deleted)
+cdd-context build --changes=summaries # Summaries only (added/modified)
+cdd-context build --changes --clip   # Copy delta to clipboard
+cdd-context status                   # Show cache state
+cdd-context clear-cache              # Clear cache (keeps PROJECT_CONTEXT.md)
+cdd-context watch                    # Watch for changes and rebuild (planned)
 ```
 
 ## How It Works
 
 1. **Scanner** walks your directory tree, respects `.gitignore` and `.contextignore`
-2. **Summarizer** generates concise summaries via LLM (Claude Haiku by default)
+2. **Summarizer** generates concise summaries (heuristic-based, LLM integration planned)
 3. **Cache** stores summaries keyed by file hash + prompt hash + backend
 4. **Generator** assembles everything into a structured markdown file
+5. **Manifest** tracks last build state for `--changes` diffs
 
 Only changed files are re-summarized. Typical projects stay under 8k tokens.
+
+## Changes Output Example
+
+```bash
+cdd-context build --changes
+```
+
+```markdown
+# Project Changes: my-project
+
+> Since scan: a1b2c3d4 → e5f6g7h8 | Mode: git
+
+## Modified
+### src/engine.py
+**Role:** entrypoint
+
+Main synthesis engine with updated MIDI routing...
+
+**Provides:** start_engine, stop_engine
+**Consumes:** os, sys, generators
+
+## Added
+### src/new_feature.py
+**Role:** library
+
+New feature implementation...
+
+## Deleted
+- src/old_module.py
+```
 
 ## Output Example
 
 ```markdown
 # Project Context: my-project
 
-> Files: 47 | Cache: 42/47 hits | Tokens: ~6200 | Mode: git
+> Files: 47 | Cache: 42/47 hits | Mode: git | Hash: a1b2c3d4
 
 ## Directory Structure
 
@@ -72,11 +134,27 @@ my-project/
 
 Main synthesis engine coordinating generators and MIDI input...
 
+**Provides:** start_engine, stop_engine, process_midi
+**Consumes:** os, sys, generators
+
 ## Other Files
 
 | File | Role | Summary |
 |------|------|---------|
 | src/generators/crystalline.py | library | Ice structure generator... |
+```
+
+## What Gets Ignored
+
+1. Everything in `.gitignore` (if in a git repo)
+2. Plus `.contextignore` patterns you add
+3. Plus built-in defaults:
+
+```
+.env, .env.*, *.pem, *.key, secrets.*
+node_modules/, __pycache__/, .git/
+*.log, *.pyc, .DS_Store
+dist/, build/, *.egg-info/
 ```
 
 ## Configuration
@@ -94,23 +172,41 @@ data/
 
 # Noise
 *.log
+vendor/
 ```
 
 ## Requirements
 
 - Python 3.10+
-- `ANTHROPIC_API_KEY` environment variable (for summarization)
+
+## Suggested Aliases
+
+Add to `~/.zshrc` or `~/.bashrc`:
+
+```bash
+alias ctx='cdd-context build --clip'           # Full context → clipboard
+alias ctxd='cdd-context build --changes --clip' # Delta → clipboard  
+alias ctxl='cdd-context build --changes=list'   # Quick list of changes
+alias ctxs='cdd-context status'                 # Check cache state
+alias ctx-reset='cdd-context clear-cache'       # Reset cache
+```
+
+Then: `ctx` for new sessions, `ctxd` mid-session after edits.
 
 ## Development
 
 This project is built using [Contract-Driven Development](https://github.com/thegdyne/cdd).
 
 ```bash
-# Run tests
-python tests/test_scanner.py
+# Setup after clone
+python tests/setup_fixtures.py
 
-# Lint contracts (requires cdd-tooling)
-cdd lint contracts/
+# Run all tests
+python tests/test_scanner.py
+python tests/test_cache.py
+python tests/test_summarizer.py
+python tests/test_generator.py
+python tests/test_cli.py
 ```
 
 ## Components
@@ -118,10 +214,16 @@ cdd lint contracts/
 | Component | Status | Description |
 |-----------|--------|-------------|
 | scanner | ✓ implemented | Directory walking, git/contextignore filtering |
-| cache | ✓ implemented | Content-addressed summary storage |
+| cache | ✓ implemented | Content-addressed summary storage + build manifest |
 | summarizer | ✓ implemented | Heuristic file summarization (LLM integration planned) |
 | generator | ✓ implemented | PROJECT_CONTEXT.md assembly |
-| cli | ✓ implemented | Command-line interface |
+| cli | ✓ implemented | Command-line interface with --changes support |
+
+## Roadmap
+
+- [ ] LLM integration (Claude Haiku for better summaries)
+- [ ] Watch mode (auto-rebuild on file changes)
+- [ ] PyPI publish (`pip install cdd-context`)
 
 ## License
 

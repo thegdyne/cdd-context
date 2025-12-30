@@ -1,0 +1,122 @@
+contract: generator
+version: 1.0.0
+status: draft
+parent: cdd-context
+
+description: |
+  Assembles PROJECT_CONTEXT.md from tree structure and file summaries.
+  Deterministic output.
+
+runner:
+  executor: python
+  entry: cdd_context/generator.py
+  symbol: generate
+
+constants:
+  token_budget: 8000
+  key_file_threshold: 5
+
+requirements:
+  - id: R001
+    priority: must
+    description: Output well-structured markdown with deterministic ordering
+    acceptance_criteria:
+      - Directory tree at top
+      - Key files section with full summaries
+      - Other files section with one-line descriptions
+      - Output order is deterministic (sorted paths)
+
+  - id: R002
+    priority: must
+    description: Token budget awareness
+    acceptance_criteria:
+      - "Estimate tokens as approx_tokens = ceil(chars / 4)"
+      - Warn if approx_tokens exceeds token_budget (8000)
+
+  - id: R003
+    priority: should
+    description: Include metadata header
+    acceptance_criteria:
+      - Files scanned count
+      - Cache hit rate
+      - ignore_mode
+      - scan_hash
+
+  - id: R004
+    priority: nice
+    description: Multiple output formats
+    acceptance_criteria:
+      - Markdown (default)
+      - JSON (--format json)
+
+tests:
+  - id: T001
+    name: output_contains_directory_structure
+    requirement: R001
+    type: unit
+    steps:
+      - action: call
+        with: { files: [{ path: "src/main.py", summary: { summary: "Main entry", role: "entrypoint" }}], ignore_mode: "git" }
+        save_as: result
+    assert:
+      - op: contains
+        actual: $.result.content
+        expected: "## Directory Structure"
+
+  - id: T002
+    name: output_contains_key_files
+    requirement: R001
+    type: unit
+    steps:
+      - action: call
+        with: { files: [{ path: "README.md", summary: { summary: "Project readme", role: "docs" }}], ignore_mode: "git" }
+        save_as: result
+    assert:
+      - op: contains
+        actual: $.result.content
+        expected: "## Key Files"
+
+  - id: T003
+    name: warns_on_large_output
+    requirement: R002
+    type: unit
+    steps:
+      - action: call
+        with: { files: $.fixtures.large_files, ignore_mode: "git" }
+        save_as: result
+    assert:
+      - op: contains
+        actual: $.result.warnings
+        expected: "token_budget_exceeded"
+
+  - id: T004
+    name: output_deterministic
+    requirement: R001
+    type: unit
+    steps:
+      - action: call
+        with: { files: $.fixtures.files, ignore_mode: "git" }
+        save_as: first
+      - action: call
+        with: { files: $.fixtures.files, ignore_mode: "git" }
+        save_as: second
+    assert:
+      - op: eq
+        actual: $.first.content
+        expected: $.second.content
+
+  - id: T005
+    name: returns_structured_output
+    requirement: R003
+    type: unit
+    steps:
+      - action: call
+        with: { files: [{ path: "test.py", summary: { summary: "Test", role: "test" }}], ignore_mode: "git" }
+        save_as: result
+    assert:
+      - op: has_keys
+        actual: $.result
+        expected: ["content", "warnings", "approx_tokens", "scan_hash"]
+
+change_log:
+  - 1.0.0: Initial contract from spec

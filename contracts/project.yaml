@@ -1,0 +1,24 @@
+project: cdd-context
+cdd_spec: 1.1.5
+version: 0.3.0
+status: draft
+
+goal: |
+  Reduce Claude session friction by generating a cacheable project context file.
+  One paste orients Claude. File details come on-demand.
+
+success_criteria:
+  - Claude can describe project structure from context file alone
+  - Changed files are re-summarized, unchanged files use cache
+  - Token cost of context file stays under 8k tokens for typical projects
+  - Works on any language (language-agnostic summarization)
+
+components:
+  - scanner
+  - summarizer
+  - cache
+  - generator
+  - cli
+
+change_log:
+  - 0.3.0: Initial contract from spec

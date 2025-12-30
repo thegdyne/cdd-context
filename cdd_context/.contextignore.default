@@ -1,0 +1,42 @@
+# Secrets (conservative - exact filenames and extensions only)
+.env
+.env.*
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.yaml
+secrets.yml
+secrets.json
+.secrets/
+
+# Keystores
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Large/binary
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp3
+*.wav
+*.zip
+*.tar.gz
+
+# Noise
+node_modules/
+__pycache__/
+.git/
+*.log
+*.pyc
+.DS_Store
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.context-cache/

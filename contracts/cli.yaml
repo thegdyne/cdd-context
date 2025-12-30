@@ -1,0 +1,92 @@
+contract: cli
+version: 1.0.0
+status: draft
+parent: cdd-context
+
+description: |
+  User interface for context generation.
+
+runner:
+  executor: shell
+  entry: cdd-context
+
+requirements:
+  - id: R001
+    priority: must
+    description: Build command generates context file
+    acceptance_criteria:
+      - "`cdd-context build` scans, summarizes, outputs PROJECT_CONTEXT.md"
+      - Root resolution via git or cwd
+
+  - id: R002
+    priority: must
+    description: Status command shows cache state
+    acceptance_criteria:
+      - "`cdd-context status` shows files tracked, cache hits, staleness"
+
+  - id: R003
+    priority: should
+    description: Watch mode for auto-rebuild
+    acceptance_criteria:
+      - "`cdd-context watch` rebuilds on file changes"
+
+  - id: R004
+    priority: should
+    description: Clipboard output option
+    acceptance_criteria:
+      - "`cdd-context build --clip` copies to clipboard"
+
+  - id: R005
+    priority: nice
+    description: Cost estimation
+    acceptance_criteria:
+      - "`cdd-context build --dry-run` shows estimated cost"
+
+  - id: R006
+    priority: must
+    description: Clear cache command
+    acceptance_criteria:
+      - "`cdd-context clear-cache` deletes .context-cache/"
+      - Does not delete PROJECT_CONTEXT.md
+
+tests:
+  - id: T001
+    name: build_creates_file
+    requirement: R001
+    type: e2e
+    steps:
+      - action: shell
+        command: ["cdd-context", "build", "--root", "fixtures/non_git_project_with_contextignore"]
+        save_as: result
+    assert:
+      - op: file_exists
+        actual: "fixtures/non_git_project_with_contextignore/PROJECT_CONTEXT.md"
+
+  - id: T002
+    name: dry_run_no_file
+    requirement: R005
+    type: e2e
+    steps:
+      - action: shell
+        command: ["cdd-context", "build", "--dry-run", "--root", "fixtures/non_git_project_with_contextignore"]
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.exit_code
+        expected: 0
+
+  - id: T003
+    name: clear_cache_only_removes_cache
+    requirement: R006
+    type: e2e
+    steps:
+      - action: shell
+        command: ["cdd-context", "clear-cache", "--root", "fixtures/non_git_project_with_contextignore"]
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.exit_code
+        expected: 0
+
+change_log:
+  - 1.0.0: Initial contract from spec

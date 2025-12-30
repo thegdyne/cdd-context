@@ -1,0 +1,180 @@
+contract: cache
+version: 1.0.0
+status: draft
+parent: cdd-context
+
+description: |
+  Stores file hashes and summaries. Only re-summarizes when source,
+  prompt, or backend changes.
+
+runner:
+  executor: python
+  entry: cdd_context/cache.py
+  symbol: Cache
+
+requirements:
+  - id: R001
+    priority: must
+    description: Store summary keyed by file path and cache_key tuple
+    acceptance_criteria:
+      - "source_hash: SHA256 of file contents"
+      - "prompt_hash: hash of the summarization prompt"
+      - "backend_id: identifier of LLM backend/model class"
+      - "tool_version: cdd-context version"
+      - Cache persists to .context-cache/ directory
+      - "Storage model: one JSON file per path (latest entry only)"
+
+  - id: R002
+    priority: must
+    description: Return cached summary if cache_key unchanged
+    acceptance_criteria:
+      - No LLM call when all cache_key components match
+      - Cache hit logged for visibility
+
+  - id: R003
+    priority: must
+    description: Invalidate on any cache_key component mismatch
+    acceptance_criteria:
+      - Changed source_hash triggers re-summarization
+      - Changed prompt_hash triggers re-summarization
+      - Changed backend_id triggers re-summarization
+      - Changed tool_version triggers re-summarization
+      - Old summary discarded (overwritten)
+
+  - id: R004
+    priority: should
+    description: Track cache statistics
+    acceptance_criteria:
+      - Report hits, misses, total tokens saved
+
+  - id: R005
+    priority: should
+    description: Report staleness reasons
+    acceptance_criteria:
+      - "status differentiates: source_changed | prompt_changed | backend_changed | tool_changed"
+
+  - id: R006
+    priority: must
+    description: Atomic writes to prevent corruption
+    acceptance_criteria:
+      - "Cache writes use atomic pattern: write to temp file, then rename"
+
+tests:
+  - id: T001
+    name: cache_hit_on_unchanged
+    requirement: R002
+    type: unit
+    steps:
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.3.0", summary: { text: "Test summary" } }
+        save_as: first
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.3.0" }
+        save_as: second
+    assert:
+      - op: eq
+        actual: $.second.cache_hit
+        expected: true
+
+  - id: T002
+    name: cache_miss_on_source_changed
+    requirement: R003
+    type: unit
+    steps:
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.3.0", summary: { text: "Test summary" } }
+        save_as: first
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "def456", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.3.0" }
+        save_as: second
+    assert:
+      - op: eq
+        actual: $.second.cache_hit
+        expected: false
+      - op: eq
+        actual: $.second.staleness_reason
+        expected: "source_changed"
+
+  - id: T003
+    name: cache_miss_on_prompt_change
+    requirement: R003
+    type: unit
+    steps:
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.3.0", summary: { text: "Test summary" } }
+        save_as: first
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p2", backend_id: "claude:haiku", tool_version: "0.3.0" }
+        save_as: second
+    assert:
+      - op: eq
+        actual: $.second.cache_hit
+        expected: false
+      - op: eq
+        actual: $.second.staleness_reason
+        expected: "prompt_changed"
+
+  - id: T004
+    name: cache_miss_on_backend_change
+    requirement: R003
+    type: unit
+    steps:
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.3.0", summary: { text: "Test summary" } }
+        save_as: first
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:sonnet", tool_version: "0.3.0" }
+        save_as: second
+    assert:
+      - op: eq
+        actual: $.second.cache_hit
+        expected: false
+      - op: eq
+        actual: $.second.staleness_reason
+        expected: "backend_changed"
+
+  - id: T005
+    name: cache_miss_on_tool_version_change
+    requirement: R003
+    type: unit
+    steps:
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.2.0", summary: { text: "Test summary" } }
+        save_as: first
+      - action: call
+        method: get_or_create
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.3.0" }
+        save_as: second
+    assert:
+      - op: eq
+        actual: $.second.cache_hit
+        expected: false
+      - op: eq
+        actual: $.second.staleness_reason
+        expected: "tool_changed"
+
+  - id: T006
+    name: status_reports_staleness_reason
+    requirement: R005
+    type: unit
+    steps:
+      - action: call
+        method: check_status
+        with: { path: "test.py", source_hash: "abc123", prompt_hash: "p1", backend_id: "claude:haiku", tool_version: "0.3.0" }
+        save_as: result
+    assert:
+      - op: has_keys
+        actual: $.result
+        expected: ["is_stale", "staleness_reason"]
+
+change_log:
+  - 1.0.0: Initial contract from spec

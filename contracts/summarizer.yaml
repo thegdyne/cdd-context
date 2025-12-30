@@ -1,0 +1,154 @@
+contract: summarizer
+version: 1.0.0
+status: draft
+parent: cdd-context
+
+description: |
+  Generates concise summaries of source files. Language-agnostic via LLM.
+  Handles secrets safely.
+
+runner:
+  executor: python
+  entry: cdd_context/summarizer.py
+  symbol: summarize_file
+
+constants:
+  max_bytes_per_file_for_llm: 200000
+  max_summary_chars: 500
+  binary_detection_bytes: 8192
+
+requirements:
+  - id: R001
+    priority: must
+    description: Generate summary for any text-based source file
+    acceptance_criteria:
+      - Works on Python, JS, SuperCollider, Scala, YAML, Dockerfile, etc.
+      - Binary detection via NUL byte in first 8192 bytes
+      - Files over 200KB excluded from LLM
+      - Produces all fields defined in output_schema
+
+  - id: R002
+    priority: must
+    description: Use LLM for summarization with versioned prompts
+    acceptance_criteria:
+      - Calls configured backend (default Claude Haiku)
+      - Prompt hash recorded with each summary
+
+  - id: R003
+    priority: should
+    description: Fallback to heuristic if LLM unavailable
+    acceptance_criteria:
+      - Extracts docstrings, function signatures, class names
+      - Performs import analysis to populate import_deps
+      - Graceful degradation, not failure
+
+  - id: R004
+    priority: must
+    description: Summary includes file role classification
+    acceptance_criteria:
+      - "One of: entrypoint, config, library, test, docs, asset, unknown"
+
+  - id: R005
+    priority: must
+    description: Summaries are versioned by backend + prompt
+    acceptance_criteria:
+      - Summarizer exposes backend_id and prompt_hash
+
+  - id: R006
+    priority: must
+    description: Secrets are never sent to the LLM
+    acceptance_criteria:
+      - "Tier A (hard exclude): private key blocks cause file exclusion"
+      - "Tier B (contextual redact): suspicious literals redacted"
+      - Redaction count recorded
+
+tests:
+  - id: T001
+    name: summarize_returns_all_fields
+    requirement: R001
+    type: unit
+    steps:
+      - action: call
+        with: { path: "fixtures/non_git_project_with_contextignore/main.py", use_llm: false }
+        save_as: result
+    assert:
+      - op: has_keys
+        actual: $.result
+        expected: ["summary", "role", "public_symbols", "import_deps", "excluded", "is_binary"]
+
+  - id: T002
+    name: binary_file_excluded
+    requirement: R001
+    type: unit
+    steps:
+      - action: call
+        with: { path: "fixtures/binary_file.bin", use_llm: false }
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.excluded
+        expected: true
+      - op: eq
+        actual: $.result.exclusion_reason
+        expected: "binary_file"
+
+  - id: T003
+    name: large_file_excluded
+    requirement: R001
+    type: unit
+    steps:
+      - action: call
+        with: { path: "fixtures/large_file.py", use_llm: false }
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.excluded
+        expected: true
+      - op: eq
+        actual: $.result.exclusion_reason
+        expected: "file_too_large"
+
+  - id: T004
+    name: private_key_excluded
+    requirement: R006
+    type: unit
+    steps:
+      - action: call
+        with: { path: "fixtures/file_with_private_key.py", use_llm: false }
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.excluded
+        expected: true
+      - op: eq
+        actual: $.result.exclusion_reason
+        expected: "private_key_block"
+
+  - id: T005
+    name: heuristic_extracts_functions
+    requirement: R003
+    type: unit
+    steps:
+      - action: call
+        with: { path: "fixtures/sample_with_functions.py", use_llm: false }
+        save_as: result
+    assert:
+      - op: gt
+        actual: $.result.public_symbols_count
+        expected: 0
+
+  - id: T006
+    name: role_classification
+    requirement: R004
+    type: unit
+    steps:
+      - action: call
+        with: { path: "fixtures/non_git_project_with_contextignore/main.py", use_llm: false }
+        save_as: result
+    assert:
+      - op: contains
+        actual: ["entrypoint", "config", "library", "test", "docs", "asset", "unknown"]
+        expected: $.result.role
+
+change_log:
+  - 1.0.0: Initial contract from spec

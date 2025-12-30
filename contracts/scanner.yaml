@@ -1,0 +1,163 @@
+contract: scanner
+version: 1.0.0
+status: draft
+parent: cdd-context
+
+description: |
+  Walks directory tree, determines file set using git when available,
+  identifies files for summarization.
+
+runner:
+  executor: python
+  entry: cdd_context/scanner.py
+  symbol: scan
+
+output_schema:
+  files: [string]          # repo-relative posix paths
+  ignore_mode: string      # "git" | "best_effort"
+  warnings: [string]       # may be empty
+  priority_paths: [string] # may be empty; paths flagged as key files by R004 heuristics
+
+requirements:
+  - id: R001
+    priority: must
+    description: Recursively scan from project root
+    acceptance_criteria:
+      - Returns list of file paths relative to root
+
+  - id: R002
+    priority: must
+    description: Determine file set using git when available, otherwise best-effort ignore matching
+    acceptance_criteria:
+      - "Case A (git available, inside worktree): File set via git ls-files, ignore_mode: git"
+      - "Case B (git available, not inside worktree): Apply .contextignore + best-effort, ignore_mode: best_effort"
+      - "Case C (git not on PATH): Apply .contextignore + best-effort, ignore_mode: best_effort, emit warning"
+      - Scanner always reports ignore_mode in output
+
+  - id: R003
+    priority: must
+    description: Respect .contextignore patterns (additive to git filtering)
+    acceptance_criteria:
+      - Additional exclusions for secrets, large files, noise
+      - ".env, *.log, node_modules, __pycache__ excluded by default"
+      - In git mode, .contextignore is applied after git file list (additive filter)
+      - In best_effort mode, .contextignore is the primary ignore source
+
+  - id: R004
+    priority: should
+    description: Identify key files heuristically
+    acceptance_criteria:
+      - "README, main entrypoint, config files flagged as priority"
+      - Detection based on filename patterns only (no parsing)
+      - Flagged paths returned in output_schema.priority_paths
+
+  - id: R005
+    priority: should
+    description: Submodules are not recursed by default
+    acceptance_criteria:
+      - Submodule path may appear as a single entry
+      - No traversal into submodule contents unless explicit option added later
+
+tests:
+  - id: T001
+    name: scan_respects_gitignore
+    requirement: R002
+    type: unit
+    steps:
+      - action: call
+        with: { root: "fixtures/project_with_gitignore" }
+        save_as: result
+    assert:
+      - op: not_contains
+        actual: $.result.files
+        expected: "ignored_file.txt"
+      - op: eq
+        actual: $.result.ignore_mode
+        expected: "git"
+
+  - id: T002
+    name: scan_excludes_secrets
+    requirement: R003
+    type: unit
+    steps:
+      - action: call
+        with: { root: "fixtures/project_with_env" }
+        save_as: result
+    assert:
+      - op: not_contains
+        actual: $.result.files
+        expected: ".env"
+
+  - id: T003
+    name: scan_sets_ignore_mode_git
+    requirement: R002
+    type: unit
+    steps:
+      - action: call
+        with: { root: "fixtures/project_with_gitignore" }
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.ignore_mode
+        expected: "git"
+
+  - id: T004
+    name: scan_sets_ignore_mode_best_effort
+    requirement: R002
+    type: unit
+    steps:
+      - action: call
+        with: { root: "fixtures/non_git_project_with_contextignore" }
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.ignore_mode
+        expected: "best_effort"
+
+  - id: T005
+    name: scan_handles_gitignore_negation
+    requirement: R002
+    type: unit
+    steps:
+      - action: call
+        with: { root: "fixtures/project_with_gitignore_negation" }
+        save_as: result
+    assert:
+      - op: contains
+        actual: $.result.files
+        expected: "important.env"
+
+  - id: T006
+    name: scan_warns_when_git_missing
+    requirement: R002
+    type: unit
+    steps:
+      - action: call
+        with: { root: "fixtures/project_with_gitignore", mock_git_missing: true }
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.ignore_mode
+        expected: "best_effort"
+      - op: contains
+        actual: $.result.warnings
+        expected: "git not found"
+
+  - id: T007
+    name: scan_handles_contextignore_negation_best_effort
+    requirement: R003
+    type: unit
+    steps:
+      - action: call
+        with: { root: "fixtures/non_git_project_with_contextignore_negation" }
+        save_as: result
+    assert:
+      - op: eq
+        actual: $.result.ignore_mode
+        expected: "best_effort"
+      - op: contains
+        actual: $.result.files
+        expected: "negated_file.txt"
+
+change_log:
+  - 1.0.0: Initial contract from spec

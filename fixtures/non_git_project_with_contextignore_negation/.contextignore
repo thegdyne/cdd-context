@@ -1,0 +1,2 @@
+*.txt
+!negated_file.txt
